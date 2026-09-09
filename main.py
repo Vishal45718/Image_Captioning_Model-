@@ -221,6 +221,29 @@ def extract_features(directory):
 features = extract_features(os.path.join(dataset_images, "Flicker8k_Dataset"))
 dump(features, open(os.path.join(dataset_text, "features.pkl"), "wb"))
 
+
+def load_photos(filename):
+    file = load_doc(filename)
+    photos = file.split("\n")[:-1]
+    photos_present = [photo for photo in photos if photo in features]
+    return photos_present
+
+
+def load_clean_descriptions(filename, photos):
+    file = load_doc(filename)
+    descriptions = {}
+    for line in file.split("\n"):
+        tokens = line.split("\t")
+        if len(tokens) < 2:
+            continue
+        image_id, image_desc = tokens[0], tokens[1]
+        if image_id in photos:
+            if image_id not in descriptions:
+                descriptions[image_id] = []
+            descriptions[image_id].append(image_desc)
+    return descriptions
+
+
 print()
 print("Cleaned descriptions saved successfully!")
 print("File:", os.path.abspath(output_file))
