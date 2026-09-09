@@ -189,7 +189,7 @@ def download_with_retry(url, file_path, max_retries=3):
         except Exception as e:
             if attempt < max_retries - 1:
                 raise e
-            print(f"Download failed on attempt failed")
+            print(f"Download failed on attempt {attempt + 1}")
             time.sleep(2 ** attempt)  # Exponential backoff
 
 weights_url = "https://storage.googleapis.com/tensorflow/keras-applications/xception/xception_weights_tf_dim_ordering_tf_kernels_notop.h5"
@@ -236,13 +236,132 @@ def load_clean_descriptions(filename, photos):
         tokens = line.split("\t")
         if len(tokens) < 2:
             continue
-        image_id, image_desc = tokens[0], tokens[1]
+        image_id, image_caption = tokens[0], tokens[1]
         if image_id in photos:
             if image_id not in descriptions:
                 descriptions[image_id] = []
-            descriptions[image_id].append(image_desc)
+            descriptions[image_id].append(image_caption)
     return descriptions
 
+def load_features(filename, photos):
+    all_features = load(open(filename, "rb"))
+    features = {k: all_features[k] for k in photos if k in all_features}
+    print("Length of features:", len(features))
+    return features
+
+filename = dataset_text + "/Flickr_8k.trainImages.txt"
+train_images = load_photos(filename)
+train_descriptions = load_clean_descriptions(os.path.join(dataset_text, "descriptions.txt"), train_images)
+train_features = load_features(os.path.join(dataset_text, "features.pkl"), train_images)
+
+
+
+def dict_to_list(descriptions):
+    """Convert a dictionary of descriptions to a list of strings."""
+    all_desc = []
+    for key in descriptions.keys():
+        [all_desc.append(d) for d in descriptions[key]]
+    return all_desc
+
+def create_tokenizer(descriptions):
+    """Create a tokenizer from the descriptions."""
+    lines = dict_to_list(descriptions)
+    tokenizer = Tokenizer()
+    tokenizer.fit_on_texts(lines)
+    return tokenizer
+
+
+
+train_descriptions_list = dict_to_list(train_descriptions)
+train_tokenizer = create_tokenizer(train_descriptions)
+
+dump(train_tokenizer, open(os.path.join(dataset_text, "tokenizer.pkl"), "wb")) 
+
+vocab_size = len(train_tokenizer.word_index) + 1
+print("Vocabulary size:", vocab_size)
+
+def max_length(descriptions):
+    """Calculate the maximum length of descriptions."""
+    lines = dict_to_list(descriptions)
+    return max(len(d.split()) for d in lines)
+
+max_length = max_length(train_descriptions)
+print("Maximum length of descriptions:", max_length)
+
+def data_generator(descriptions, features, tokenizer, max_length, vocab_size, batch_size=32):
+    """Generate batches of data for training."""
+    while True:
+        for key, desc_list in descriptions.items():
+            feature = features[key][0]
+            for desc in desc_list:
+                seq = tokenizer.texts_to_sequences([desc])[0]
+                for i in range(1, len(seq)):
+                    in_seq, out_seq = seq[:i], seq[i]
+                    in_seq = pad_sequences([in_seq], maxlen=max_length)[0]
+                    out_seq = to_categorical([out_seq], num_classes=vocab_size)[0]
+                    yield [feature, in_seq], out_seq
+    output_signature = (
+        {
+            "input_1": tf.TensorSpec(shape=(2048,), dtype=tf.float32),
+            "input_2": tf.TensorSpec(shape=(max_length,), dtype=tf.int32),
+        },
+        tf.TensorSpec(shape=(vocab_size,), dtype=tf.float32)
+    ) 
+
+
+    dataset = tf.data.Dataset.from_generator(
+        lambda: data_generator(descriptions, features, tokenizer, max_length, vocab_size),
+        output_signature=output_signature
+    )
+
+    return dataset.batch(batch_size).prefetch(buffer_size=tf.data.AUTOTUNE)
+
+
+def create_sequence(tokenizer, max_length, desc_list, feature):
+    """Create input-output sequences for a given image feature and its descriptions."""
+    X1, X2, y = [], [], []
+    for desc in desc_list:
+        seq = tokenizer.texts_to_sequences([desc])[0]
+        for i in range(1, len(seq)):
+            in_seq, out_seq = seq[:i], seq[i]
+            in_seq = pad_sequences([in_seq], maxlen=max_length)[0]
+            out_seq = to_categorical([out_seq], num_classes=vocab_size)[0]
+            X1.append(feature)
+            X2.append(in_seq)
+            y.append(out_seq)
+    return np.array(X1), np.array(X2), np.array(y)
+
+
+dataset = data_generator(train_descriptions, train_features, train_tokenizer, max_length, vocab_size)
+
+for (a, b) in dataset.take(1):
+    print("Input 1 shape:", a["input_1"].shape)
+    print("Input 2 shape:", a["input_2"].shape)
+    print("Output shape:", b.shape)
+    break
+
+def define_model(vocab_size, max_length):
+    """Define the image captioning model architecture."""
+    #CNN model from 2048 nodes to 256 nodes
+    inputs1 = Input(shape=(2048,))
+    fe1 = Dropout(0.5)(inputs1)
+    fe2 = Dense(256, activation="relu")(fe1)
+
+    #LSTM model from max_length to 256 nodes
+    inputs2 = Input(shape=(max_length,))
+    se1 = Embedding(vocab_size, 256, mask_zero=True)(inputs2)
+    se2 = Dropout(0.5)(se1)
+    se3 = LSTM(256)(se2)
+
+    # Decoder model
+    decoder1 = Add()([fe2, se3])
+    decoder2 = Dense(256, activation="relu")(decoder1)
+    outputs = Dense(vocab_size, activation="softmax")(decoder2)
+
+    # Tie it together [image + caption] -> [word]
+    model = Model(inputs=[inputs1, inputs2], outputs=outputs)
+    
+    return model
 
 print()
 print("Cleaned descriptions saved successfully!")
