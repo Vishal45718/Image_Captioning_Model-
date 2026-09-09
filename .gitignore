@@ -1,0 +1,20 @@
+# Python virtual environment
+bin/
+lib/
+lib64/
+include/
+share/
+pyvenv.cfg
+
+# Dataset
+Flickr8k_Dataset/
+Flickr8k_Dataset.zip
+Flickr8k_text/
+Flickr8k_text.zip
+
+# Model weights
+*.h5
+
+# Python cache
+__pycache__/
+*.pyc
