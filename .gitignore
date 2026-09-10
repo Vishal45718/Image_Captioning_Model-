@@ -12,8 +12,9 @@ Flickr8k_Dataset.zip
 Flickr8k_text/
 Flickr8k_text.zip
 
-# Model weights
+# Model weights / checkpoints
 *.h5
+models/
 
 # Python cache
 __pycache__/
